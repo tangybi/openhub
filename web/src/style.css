@@ -1,0 +1,79 @@
+/* HotScope 设计令牌 —— 60/30/10 色系：
+   60% 浅灰（页面底/卡片/边框/中性文字）+
+   30% 辅助 浅紫 #D1C4E9（徽章/软底/次要强调）+
+   10% 强调 互补浅绿 #DCE9C3（CTA/激活态/品牌标）。
+   浅绿上文字统一用深绿 --accent-strong，保证可读性。 */
+:root {
+  /* 60% 浅灰 —— 主色 */
+  --bg: #e9e9f0;
+  --bg-deep: #dcdce6;
+  --bg-soft: #f1f1f6;
+  --surface: #f7f7fb;
+  --surface-2: #ffffff;
+  --border: #d7d7e3;
+
+  /* 中性文字（灰阶） */
+  --text: #2f2f3e;
+  --text-2: #6b6b7d;
+  --text-3: #9b9bae;
+  --on-dark: #2f2f3e;
+  --on-dark-2: #6b6b7d;
+  --on-dark-3: #9b9bae;
+
+  /* 30% 辅助 —— 浅紫 #d1c4e9 */
+  --accent-2: #d1c4e9;
+  --accent-soft: rgba(209, 196, 233, 0.5);
+  --accent-warm: #5e5387;
+
+  /* 10% 强调 —— 互补浅绿 #dce9c3 */
+  --accent: #dce9c3;
+  --accent-strong: #47652b;
+  --grad: linear-gradient(135deg, #dce9c3, #c9dba5);
+
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow: 0 2px 8px rgba(20, 20, 30, 0.08);
+  --shadow-lg: 0 14px 40px rgba(20, 20, 30, 0.16);
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--on-dark);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+input {
+  font-family: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-main {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 20px 20px 64px;
+}
