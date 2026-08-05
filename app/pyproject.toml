@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hotscoapp"
+version = "0.1.0"
+description = "HotScope 热点聚合 FastAPI 后端（app/ 自包含 uv 项目）"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi[standard]>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "httpx>=0.27",
+    "feedparser>=6.0",
+    "python-dotenv>=1.0",
+    # 用户/会话/向量存储（云端 Postgres + pgvector）
+    "sqlalchemy>=2.0",
+    "asyncpg>=0.29",
+    "pgvector>=0.3",
+    "greenlet>=3.0",   # SQLAlchemy 异步会话必需
+    "psycopg[binary,pool]>=3.1",  # mem0 pgvector 后端用 psycopg + psycopg_pool 连 Postgres
+    # 用户长期记忆（mem0，向量后端走 pgvector）
+    "mem0ai>=2.0.14",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools]
+packages = ["app", "app.agents", "app.routers", "app.services", "app.storage"]
+
+[tool.setuptools.package-dir]
+"app" = "."
+"app.agents" = "agents"
+"app.routers" = "routers"
+"app.services" = "services"
+"app.storage" = "storage"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.fastapi]
+entrypoint = "app.main:app"

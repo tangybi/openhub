@@ -1,14 +1,19 @@
 import type { AgentInfo, CategoryInfo, NewsListResponse, SourceRef } from './types'
+import { getDeviceId, getSessionId } from './utils/identity'
 
 // 生产环境后端域名：web/.env.production 里配 VITE_API_BASE_URL（或 Vercel 环境变量）。
 // 本地开发留空 → 走 vite.config.ts 的 /api 代理（127.0.0.1:8000）。
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${url}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  })
+  // 身份头：device_id 唯一标识（后端惰性注册用户），session_id 标记会话。
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Device-Id': getDeviceId(),
+    'X-Session-Id': getSessionId(),
+    ...(options?.headers as Record<string, string> | undefined),
+  }
+  const res = await fetch(`${API_BASE}${url}`, { ...options, headers })
   const data = await res.json().catch(() => null)
   if (!res.ok) {
     throw new Error(data?.detail || data?.error || `请求失败：${res.status}`)

@@ -1,0 +1,16 @@
+# Python / uv
+.venv
+.uv-cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 密钥与环境变量（app/.env 含 DEEPSEEK_API_KEY，不入库）
+.env
+
+# 测试与临时产物
+tests/
+log/
+*.csv

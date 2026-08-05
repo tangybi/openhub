@@ -50,7 +50,7 @@ onBeforeUnmount(() => {
     <div v-if="!loading && items.length === 0" class="empty">
       <p>暂无热点数据</p>
       <p class="empty-sub">
-        后端启动后点右上角「抓取最新」拉取 RSS / RSSHub，或在后端目录执行
+        后端启动后点右上角「抓取最新」拉取 RSS，或在 app/ 目录执行
         <code>uv run python -m app.services.rss_ingest</code>
       </p>
     </div>
