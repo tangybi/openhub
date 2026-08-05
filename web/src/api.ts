@@ -1,7 +1,11 @@
 import type { AgentInfo, CategoryInfo, NewsListResponse, SourceRef } from './types'
 
+// 生产环境后端域名：web/.env.production 里配 VITE_API_BASE_URL（或 Vercel 环境变量）。
+// 本地开发留空 → 走 vite.config.ts 的 /api 代理（127.0.0.1:8000）。
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
+  const res = await fetch(`${API_BASE}${url}`, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   })
