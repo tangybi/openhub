@@ -1,8 +1,8 @@
 /* HotScope 设计令牌 —— 60/30/10 色系：
    60% 浅灰（页面底/卡片/边框/中性文字）+
    30% 辅助 浅紫 #D1C4E9（徽章/软底/次要强调）+
-   10% 强调 互补浅绿 #DCE9C3（CTA/激活态/品牌标）。
-   浅绿上文字统一用深绿 --accent-strong，保证可读性。 */
+   10% 强调 深紫 #6A5ACD（CTA/激活态/品牌标）。
+   深紫上文字统一用近白 --accent-strong，保证可读性。 */
 :root {
   /* 60% 浅灰 —— 主色 */
   --bg: #e9e9f0;
@@ -25,10 +25,10 @@
   --accent-soft: rgba(209, 196, 233, 0.5);
   --accent-warm: #5e5387;
 
-  /* 10% 强调 —— 互补浅绿 #dce9c3 */
-  --accent: #dce9c3;
-  --accent-strong: #47652b;
-  --grad: linear-gradient(135deg, #dce9c3, #c9dba5);
+  /* 10% 强调 —— 深紫 #6a5acd */
+  --accent: #6a5acd;
+  --accent-strong: #f2effa;
+  --grad: linear-gradient(135deg, #6a5acd, #4b3fa3);
 
   --radius: 16px;
   --radius-sm: 10px;

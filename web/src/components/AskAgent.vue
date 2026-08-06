@@ -208,7 +208,7 @@ async function send() {
 
 .msg-sources a {
   font-size: 12px;
-  color: var(--accent-strong);
+  color: var(--accent-warm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
