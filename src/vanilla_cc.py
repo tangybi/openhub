@@ -188,6 +188,11 @@ PARALLEL_TOOLS = {"read_file", "glob"}
 # 超过上限先注入提示要求收敛，仍不收敛则强制终止本轮。
 MAX_TOOL_ROUNDS = 6
 
+# 思考轮次上限：agent_loop 每次迭代 = 一次模型调用（= 一次思考）。
+# 工具守卫只管工具循环，但 Stop hook 强制 continue、模型空转不调工具等
+# 路径也能无限转。这里是外层硬上限，超了不再调模型、直接强制结束。
+MAX_THINKING_ROUNDS = 10
+
 DENY_LIST = [
     "rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda",
 ]
@@ -348,9 +353,17 @@ def _validate_args(fn, args: dict) -> str | None:
 
 
 def agent_loop(messages):
-    tool_rounds = 0    # 本轮用户提问的工具往返计数
-    force_stop = False # 已要求收敛但仍继续调工具 → 下一轮强制终止
+    tool_rounds = 0     # 本轮用户提问的工具往返计数
+    force_stop = False  # 已要求收敛但仍继续调工具 → 下一轮强制终止
+    thinking_rounds = 0 # 本轮用户提问的模型调用计数（思考轮次）
     while True:
+        # 思考轮次硬上限：在调模型之前检查，超了不再多花一次 token
+        thinking_rounds += 1
+        if thinking_rounds > MAX_THINKING_ROUNDS:
+            print(f"\033[90m[GUARD] 思考轮次超 {MAX_THINKING_ROUNDS} 次,强制结束本轮\033[0m")
+            messages.append({"role": "assistant",
+                             "content": "⚠️ 已达到最大思考轮次,本轮已终止。请重新描述需求或检查配置。"})
+            return messages
         # 用户输入后 hook
         trigger_hooks("UserPromptSubmit", messages)
         response = client.chat.completions.create(
