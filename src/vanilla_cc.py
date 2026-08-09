@@ -183,6 +183,11 @@ TOOL_HANDLES = {"bash": run_bash, "read_file": run_read, "write_file": run_write
 # 以后加 web_search / get_weather / fetch_url 等网络工具时记得加进这里。
 PARALLEL_TOOLS = {"read_file", "glob"}
 
+# 重试守卫：每轮用户提问允许的模型↔工具往返上限。
+# 工具失败会回给模型自纠，但模型可能反复生成坏参数无限重试烧 token，
+# 超过上限先注入提示要求收敛，仍不收敛则强制终止本轮。
+MAX_TOOL_ROUNDS = 6
+
 DENY_LIST = [
     "rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda",
 ]
@@ -261,7 +266,9 @@ register_hook("UserPromptSubmit", context_inject_hook)
 def permission_hook(block):
     # ChatCompletionMessageToolCall 只有 function.name / function.arguments
     name = block.function.name
-    args = json.loads(block.function.arguments or "{}")
+    args, parse_err = _safe_parse_args(block)
+    if parse_err or args is None:
+        return None  # 参数解析不了就不做权限判断，错误会由 _run_tool 回给模型
     if name == "bash":
         for pattern in DENY_LIST:
             if pattern in args.get("command", ""):
@@ -289,9 +296,10 @@ register_hook("PostToolUse", large_output_hook)
 
 def summary_hook(messages: list) -> str | None:
     """Print a summary when the loop is about to stop."""
+    # messages 里混着 dict(用户/tool)和 pydantic 的 ChatCompletionMessage(assistant),
+    # 后者没有 .get,不能假设都能 dict 访问;tool 结果是 {"role": "tool", ...} 形状
     tool_count = sum(1 for m in messages
-                     for b in (m.get("content") if isinstance(m.get("content"), list) else [])
-                     if isinstance(b, dict) and b.get("type") == "tool_result")
+                     if isinstance(m, dict) and m.get("role") == "tool")
     print(f"\033[90m[HOOK] Stop: session used {tool_count} tool calls\033[0m")
     return None   # return None = allow stop, return string = force continuation
 
@@ -340,9 +348,11 @@ def _validate_args(fn, args: dict) -> str | None:
 
 
 def agent_loop(messages):
+    tool_rounds = 0    # 本轮用户提问的工具往返计数
+    force_stop = False # 已要求收敛但仍继续调工具 → 下一轮强制终止
     while True:
         # 用户输入后 hook
-        trigger_hooks("UserPromptSubmit", messages)  
+        trigger_hooks("UserPromptSubmit", messages)
         response = client.chat.completions.create(
             model="deepseek-v4-flash",
             messages=messages,
@@ -360,6 +370,23 @@ def agent_loop(messages):
                 messages.append({"role": "user", "content": force})
                 continue
             return messages
+
+        # 重试守卫：模型持续调工具不收敛时兜底
+        tool_rounds += 1
+        if force_stop:
+            print(f"\033[90m[GUARD] 工具调用超 {MAX_TOOL_ROUNDS} 轮仍未收敛,强制终止本轮\033[0m")
+            messages.append({"role": "assistant",
+                             "content": "⚠️ 已达到工具调用轮次上限,本轮已终止。"})
+            return messages
+        if tool_rounds > MAX_TOOL_ROUNDS:
+            force_stop = True
+            print(f"\033[90m[GUARD] 超过 {MAX_TOOL_ROUNDS} 轮,注入提示要求模型收敛\033[0m")
+            messages.append({
+                "role": "system",
+                "content": (f"工具调用已超过 {MAX_TOOL_ROUNDS} 轮仍未收敛。"
+                            "请停止调用工具,基于现有信息直接给出最终回答。"),
+            })
+            continue
 
         # 工具循环调用（并行执行，按原顺序回填结果）
         tool_calls = response.choices[0].message.tool_calls
