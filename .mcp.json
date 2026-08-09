@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tool-mcp": {
+      "command": "/Users/ybt/code/python/dynamicEffects/src/.venv/bin/python",
+      "args": ["/Users/ybt/code/python/dynamicEffects/src/tool_mcp.py"]
+    }
+  }
+}

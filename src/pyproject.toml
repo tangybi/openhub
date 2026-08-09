@@ -1,0 +1,11 @@
+[project]
+name = "dynamic-effects-src"
+version = "0.1.0"
+description = "Source scripts for dynamic effects"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp<2",
+    "python-dotenv>=1.2.2",
+    "tavily>=1.1.0",
+]
