@@ -6,6 +6,7 @@
 #
 # 依赖(已写入 src/pyproject.toml): mcp<2, httpx, python-dotenv, tavily
 
+import asyncio
 import os
 import urllib.parse
 
@@ -30,6 +31,11 @@ figma_token = _get_env_or_exit("FIGMA_TOKEN")
 
 tavily_client = TavilyClient(api_key=tavily_api_key)
 
+# 并发策略: 限制对第三方 API 的同时请求数,避免触发 Tavily / Figma 限流。
+# 值按实际额度调: 越大并行越快,越容易撞限流。
+_tavily_sem = asyncio.Semaphore(4)
+_figma_sem = asyncio.Semaphore(4)
+
 mcp = FastMCP("tool-mcp")
 
 
@@ -38,7 +44,7 @@ mcp = FastMCP("tool-mcp")
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-def web_search(
+async def web_search(
     query: str,
     max_results: int = 5,
     search_depth: str = "basic",
@@ -54,33 +60,38 @@ def web_search(
         days: 只返回最近 N 天内的结果,默认 30。
         include_answer: 是否附带 Tavily 生成的答案摘要,默认 True。
     """
-    return tavily_client.search(
-        query=query,
-        search_depth=search_depth,
-        max_results=max_results,
-        include_answer=include_answer,
-        days=days,
-        sort_by="date",
-    )
+    async with _tavily_sem:
+        # Tavily 是同步客户端,丢进线程执行,避免阻塞事件循环(阻塞会串行化所有并发调用)
+        return await asyncio.to_thread(
+            tavily_client.search,
+            query=query,
+            search_depth=search_depth,
+            max_results=max_results,
+            include_answer=include_answer,
+            days=days,
+            sort_by="date",
+        )
 
 
 @mcp.tool()
-def get_weather(location: str, days: int = 7) -> dict:
+async def get_weather(location: str, days: int = 7) -> dict:
     """查询指定地点未来一周的天气情况。
 
     Args:
         location: 地点,例如 "杭州" 或 "San Francisco"。
         days: 查询未来几天的天气,默认 7。
     """
-    search_query = f"查询最新{location}未来{days}天的天气"
-    return tavily_client.search(
-        query=search_query,
-        search_depth="basic",
-        max_results=5,
-        include_answer=True,
-        days=30,
-        sort_by="date",
-    )
+    async with _tavily_sem:
+        search_query = f"查询最新{location}未来{days}天的天气"
+        return await asyncio.to_thread(
+            tavily_client.search,
+            query=search_query,
+            search_depth="basic",
+            max_results=5,
+            include_answer=True,
+            days=30,
+            sort_by="date",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +117,8 @@ async def get_file(file_key: str) -> dict:
     Args:
         file_key: Figma 文件 URL 里斜杠后那串 ID,例如 "abc123DEF"。
     """
-    return await _figma_get(f"/files/{file_key}")
+    async with _figma_sem:
+        return await _figma_get(f"/files/{file_key}")
 
 
 @mcp.tool()
@@ -117,8 +129,9 @@ async def get_file_nodes(file_key: str, node_ids: str) -> dict:
         file_key: Figma 文件 URL 里的 ID。
         node_ids: 节点 ID,多个用英文逗号分隔,例如 "0:1,0:2"。
     """
-    encoded = urllib.parse.quote(node_ids, safe=",")
-    return await _figma_get(f"/files/{file_key}/nodes?ids={encoded}")
+    async with _figma_sem:
+        encoded = urllib.parse.quote(node_ids, safe=",")
+        return await _figma_get(f"/files/{file_key}/nodes?ids={encoded}")
 
 
 @mcp.tool()
@@ -128,7 +141,8 @@ async def get_comments(file_key: str) -> dict:
     Args:
         file_key: Figma 文件 URL 里的 ID。
     """
-    return await _figma_get(f"/files/{file_key}/comments")
+    async with _figma_sem:
+        return await _figma_get(f"/files/{file_key}/comments")
 
 
 if __name__ == "__main__":
