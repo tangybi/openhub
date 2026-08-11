@@ -37,6 +37,21 @@ class Settings:
     # 云端数据库（Neon Postgres + pgvector）：users/sessions/messages + RAG 向量 + mem0 记忆
     database_url: str = field(default_factory=lambda: _get("DATABASE_URL"))
 
+    # 对象存储：Cloudflare R2（S3 兼容，boto3）。粘贴正文与附件落 R2，短链接 302 直出。
+    r2_access_key: str = field(default_factory=lambda: _get("R2_ACCESS_KEY"))
+    r2_secret_key: str = field(default_factory=lambda: _get("R2_SECRET_KEY"))
+    r2_endpoint: str = field(
+        default_factory=lambda: _get(
+            "R2_ENDPOINT", "https://<accountid>.r2.cloudflarestorage.com"
+        )
+    )
+    r2_bucket: str = field(default_factory=lambda: _get("R2_BUCKET"))
+    r2_public_base_url: str = field(default_factory=lambda: _get("R2_PUBLIC_BASE_URL"))
+
+    # 应用公开访问基础地址（分享短链接前缀，如 https://api.example.com）。
+    # 留空时按请求 Host 推导（本地开发/直连部署无需配置）。
+    app_base_url: str = field(default_factory=lambda: _get("APP_BASE_URL"))
+
     # embedding 向量化（硅基流动 BGE-M3；DeepSeek 无 embedding 接口，RAG/mem0 都需要）
     embedding_api_key: str = field(default_factory=lambda: _get("EMBEDDING_API_KEY"))
     embedding_base_url: str = field(

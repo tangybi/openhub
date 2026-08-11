@@ -2,9 +2,11 @@
 import { computed, onMounted, ref } from 'vue'
 import type { AgentInfo } from './types'
 import { fetchAgents } from './api'
+import { runWithSpan } from './utils/tracing'
 import { AGENT_TABS } from './agents'
 import AppHeader from './components/AppHeader.vue'
 import NewsView from './views/NewsView.vue'
+import PasteView from './views/PasteView.vue'
 import PlaceholderView from './views/PlaceholderView.vue'
 
 const agents = ref<AgentInfo[]>([])
@@ -14,19 +16,22 @@ const backendUp = ref(true)
 const activeAgentInfo = computed(() => agents.value.find((a) => a.name === activeAgent.value))
 
 onMounted(async () => {
-  try {
-    agents.value = await fetchAgents()
-  } catch {
-    // 后端不可用时退化为本地定义，保证 UI 可展示
-    backendUp.value = false
-    agents.value = AGENT_TABS.map((t) => ({
-      name: t.name,
-      label: t.label,
-      category: t.label,
-      available: true,
-      description: '',
-    }))
-  }
+  // 页面浏览埋点：整段首屏初始化作为一次 page_view 业务事件（含 fetchAgents 耗时）
+  await runWithSpan('page_view', { page: 'home', agent: activeAgent.value }, async () => {
+    try {
+      agents.value = await fetchAgents()
+    } catch {
+      // 后端不可用时退化为本地定义，保证 UI 可展示
+      backendUp.value = false
+      agents.value = AGENT_TABS.map((t) => ({
+        name: t.name,
+        label: t.label,
+        category: t.label,
+        available: true,
+        description: '',
+      }))
+    }
+  })
 })
 </script>
 
@@ -38,6 +43,7 @@ onMounted(async () => {
     </div>
     <main class="app-main">
       <NewsView v-if="activeAgent === 'news'" />
+      <PasteView v-else-if="activeAgent === 'paste'" />
       <PlaceholderView v-else :agent="activeAgentInfo" />
     </main>
   </div>

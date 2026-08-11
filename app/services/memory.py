@@ -8,10 +8,19 @@
 from __future__ import annotations
 
 import asyncio
+import os
+
+# 禁用 mem0 的 PostHog 遥测：遥测会发起阻塞网络调用（feature flags 等），
+# 每次记忆检索/写入都拖慢数秒。必须在 mem0 初始化前设置。
+os.environ.setdefault("MEM0_TELEMETRY", "False")
 
 from mem0 import Memory
 
+from ..logger_config import get_logger
+
 from ..config import settings
+
+logger = get_logger()
 
 # BGE-M3 输出维度
 EMBED_DIM = 1024
@@ -51,10 +60,16 @@ def _mem0_config() -> dict:
 async def search_memories(user_id: str, query: str, top_k: int = 5) -> list[str]:
     """检索用户长期记忆（跨会话）。配置缺失或失败时返回空列表，不阻塞问答。"""
     if not (settings.deepseek_api_key and settings.embedding_api_key and settings.database_url):
+        logger.info("记忆检索跳过：未配置 deepseek/embedding/database（user=%s query=%s）", user_id or "-", query)
         return []
     try:
-        return await asyncio.to_thread(_search_sync, user_id, query, top_k)
+        memories = await asyncio.to_thread(_search_sync, user_id, query, top_k)
+        logger.info("记忆检索[user=%s query=%s]：命中 %d 条", user_id or "-", query, len(memories))
+        for mem in memories:
+            logger.info("  · %s", mem)
+        return memories
     except Exception:
+        logger.exception("记忆检索失败（user=%s query=%s）", user_id or "-", query)
         return []
 
 

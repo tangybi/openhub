@@ -21,7 +21,13 @@ dependencies = [
     "greenlet>=3.0",   # SQLAlchemy 异步会话必需
     "psycopg[binary,pool]>=3.1",  # mem0 pgvector 后端用 psycopg + psycopg_pool 连 Postgres
     # 用户长期记忆（mem0，向量后端走 pgvector）
-    "mem0ai>=2.0.14",
+    "mem0ai[nlp]>=2.0.14",
+    # 对象存储：Cloudflare R2（S3 兼容），粘贴正文与附件
+    "boto3>=1.34",
+    "opentelemetry-api>=1.24",
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+    "opentelemetry-instrumentation-httpx>=0.49b0",
 ]
 
 [dependency-groups]

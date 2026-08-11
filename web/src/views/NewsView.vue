@@ -154,7 +154,7 @@ onMounted(async () => {
       </transition>
     </div>
 
-    <AskAgent agent-label="热点新闻" />
+    <AskAgent agent-label="AI 助手" />
   </div>
 </template>
 

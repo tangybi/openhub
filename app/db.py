@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import secrets
+import string
 from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, select, text
@@ -92,6 +93,40 @@ class Message(Base):
     session_id: Mapped[str] = mapped_column(String(64), ForeignKey("sessions.id"), index=True)
     role: Mapped[str] = mapped_column(String(16))  # user / assistant
     content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+_PASTE_CODE_ALPHABET = string.ascii_letters + string.digits  # 62 进制字符集
+
+
+def generate_paste_code(length: int = 8) -> str:
+    """随机短码（base62，8 位）；唯一性由主键约束兜底，冲突时外层重试。"""
+    return "".join(secrets.choice(_PASTE_CODE_ALPHABET) for _ in range(length))
+
+
+class Paste(Base):
+    __tablename__ = "pastes"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True)  # 短码，如 "aB3x9K"
+    title: Mapped[str] = mapped_column(String(200), default="")
+    content_key: Mapped[str] = mapped_column(String(512))  # 正文文本的 R2 key
+    language: Mapped[str] = mapped_column(String(32), default="")
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    delete_token: Mapped[str] = mapped_column(String(64))  # 删除凭证，仅创建时返回
+    view_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class PasteFile(Base):
+    __tablename__ = "paste_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    paste_id: Mapped[str] = mapped_column(String(12), ForeignKey("pastes.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(128), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    key: Mapped[str] = mapped_column(String(512))  # R2 key
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

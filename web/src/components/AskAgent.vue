@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import type { ChatMessage } from '../types'
-import { askAgent } from '../api'
+import { askRouterStream, fetchChatHistory } from '../api'
 
 const props = defineProps<{ agentLabel: string }>()
 
@@ -10,11 +10,28 @@ const input = ref('')
 const sending = ref(false)
 const messages = ref<ChatMessage[]>([])
 const bodyRef = ref<HTMLElement | null>(null)
+const historyLoaded = ref(false)
 
 async function scrollBottom() {
   await nextTick()
   if (bodyRef.value) bodyRef.value.scrollTop = bodyRef.value.scrollHeight
 }
+
+// 打开聊天窗时恢复会话历史（刷新/重开断点恢复），仅当本地还没有消息时拉取一次
+watch(open, async (v) => {
+  if (v && !historyLoaded.value && !messages.value.length) {
+    try {
+      const history = await fetchChatHistory()
+      if (history.length) {
+        messages.value = history.map((m) => ({ role: m.role, content: m.content }))
+        scrollBottom()
+      }
+    } catch {
+      // 历史拉取失败不阻塞，继续允许提问
+    }
+    historyLoaded.value = true
+  }
+})
 
 async function send() {
   const q = input.value.trim()
@@ -23,15 +40,32 @@ async function send() {
   input.value = ''
   sending.value = true
   scrollBottom()
-  try {
-    const res = await askAgent('news', q)
-    messages.value.push({ role: 'assistant', content: res.answer, sources: res.sources })
-  } catch (e: any) {
-    messages.value.push({ role: 'assistant', content: e?.message || '请求失败', error: true })
-  } finally {
-    sending.value = false
-    scrollBottom()
-  }
+  // 先插入空 assistant 气泡，流式累积；持有对象引用，避免按索引在并发/关闭面板时漂移
+  const bubble: ChatMessage = { role: 'assistant', content: '' }
+  messages.value.push(bubble)
+  await askRouterStream(q, {
+    onSources(sources) {
+      bubble.sources = sources
+    },
+    onDelta(text) {
+      bubble.content += text
+      scrollBottom()
+    },
+    onDone() {
+      // 结束：无需额外处理
+    },
+    onError(msg) {
+      if (!bubble.content) {
+        bubble.content = msg
+      } else {
+        bubble.content += `\n\n[${msg}]`
+      }
+      bubble.error = true
+      scrollBottom()
+    },
+  })
+  sending.value = false
+  scrollBottom()
 }
 </script>
 
@@ -45,18 +79,18 @@ async function send() {
         </div>
         <div ref="bodyRef" class="ask-body">
           <div v-if="!messages.length" class="ask-empty">
-            输入问题，Agent 会基于当前聚合的热点新闻回答并附来源。
+            输入问题，自动派发给对应专家（热点 / 粘贴查询…）。
           </div>
           <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
-            <div class="msg-bubble" :class="{ error: m.error }">{{ m.content }}</div>
+            <div class="msg-bubble" :class="{ error: m.error }">
+              <template v-if="m.content">{{ m.content }}</template>
+              <span v-else-if="sending && i === messages.length - 1" class="thinking">思考中…</span>
+            </div>
             <div v-if="m.sources?.length" class="msg-sources">
               <a v-for="s in m.sources" :key="s.url" :href="s.url" target="_blank" rel="noopener">
                 ↗ {{ s.source }} · {{ s.title }}
               </a>
             </div>
-          </div>
-          <div v-if="sending" class="msg assistant">
-            <div class="msg-bubble thinking">思考中…</div>
           </div>
         </div>
         <div class="ask-input">

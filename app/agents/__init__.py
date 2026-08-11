@@ -11,13 +11,15 @@ from __future__ import annotations
 
 from .base import Agent
 from .news_agent import NewsAgent
+from .paste_query_agent import PasteQueryAgent
 from .placeholder import BrandAgent, FinanceAgent, LearningAgent
 
 AGENTS: dict[str, Agent] = {
     "news": NewsAgent(),
-    "finance": FinanceAgent(),
-    "brand": BrandAgent(),
-    "learning": LearningAgent(),
+    "paste": PasteQueryAgent(),
+    # "finance": FinanceAgent(),
+    # "brand": BrandAgent(),
+    # "learning": LearningAgent(),
 }
 
-__all__ = ["Agent", "AGENTS", "NewsAgent"]
+__all__ = ["Agent", "AGENTS", "NewsAgent", "PasteQueryAgent"]

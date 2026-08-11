@@ -7,9 +7,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .logger_config import setup_logging
+from .otel import init_tracing
+
 from . import __version__
 from .config import settings
-from .routers import agents, cron, news
+from .routers import agents, cron, news, pastes, trace
 
 
 @asynccontextmanager
@@ -37,7 +40,11 @@ app.add_middleware(
 app.include_router(news.router)
 app.include_router(agents.router)
 app.include_router(cron.router)
-
+app.include_router(trace.router)
+app.include_router(pastes.router)
+app.include_router(pastes.public_router)
+setup_logging()
+init_tracing(app)
 
 @app.get("/")
 async def root():
