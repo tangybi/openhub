@@ -84,3 +84,36 @@ async def cache_delete(key: str) -> None:
         await client.delete(key)
     except Exception:
         pass
+
+
+async def cache_rpush(key: str, *values: str) -> None:
+    """右侧追加（消息写入直推 Redis）。"""
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        await client.rpush(key, *values)
+    except Exception:
+        pass
+
+
+async def cache_ltrim(key: str, start: int, stop: int) -> None:
+    """裁剪列表，保留闭区间 [start, stop]（消息上限控制）。"""
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        await client.ltrim(key, start, stop)
+    except Exception:
+        pass
+
+
+async def cache_lrange(key: str, start: int, stop: int) -> list[str] | None:
+    """按索引取列表片段。Redis 不可用时返回 None（调用方退 DB）；空列表返回 []。"""
+    client = _get_client()
+    if client is None:
+        return None
+    try:
+        return await client.lrange(key, start, stop)
+    except Exception:
+        return None

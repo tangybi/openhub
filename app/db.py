@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import secrets
 import string
 from datetime import datetime, timezone
@@ -17,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from .cache import cache_get, cache_get_json, cache_set, cache_set_json
+from .cache import cache_get, cache_lrange, cache_ltrim, cache_rpush, cache_set
 from .config import settings
 
 _engine: AsyncEngine | None = None
@@ -150,33 +152,51 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
+# 身份查询并发去重：同 device_id 的多个并发请求共享同一个 DB 调用，
+# 页面首屏 3 个请求（news/categories/agents）只打 1 次 Neon，另外 2 个 await 复用结果。
+_pending_identity: dict[str, asyncio.Task] = {}
+
+
 async def get_or_create_user(device_id: str) -> User:
     """按设备唯一标识惰性注册用户；同 device_id 永远返回同一用户。
 
-    先查 Redis（device_id → user_id），命中直接返回，跳过 Neon 往返
-    （Neon 冷连接/跨地域单次查询可达 1-3s）；未命中才查库，成功后写缓存。
-    Redis 不可用时静默降级为纯 DB 逻辑。
+    Redis 命中 → 直接返回（毫秒级）；未命中 → 查 DB（1.5-3s），成功后写 Redis。
+    并发去重：同 device_id 的并发请求共享一次 DB 调用，避免 3 个一起打 DB。
     """
     cached = await cache_get(f"identity:{device_id}")
     if cached:
         return User(id=cached, device_id=device_id)
-    sm = get_sessionmaker()
-    async with sm() as db:
-        row = await db.execute(select(User).where(User.device_id == device_id))
-        user = row.scalar_one_or_none()
-        if user is not None:
-            await cache_set(f"identity:{device_id}", user.id, ttl=IDENTITY_TTL)
-            return user
-        for _ in range(5):  # 随机 id 撞主键时重试
-            user = User(id=generate_user_id(), device_id=device_id)
-            db.add(user)
-            try:
-                await db.commit()
+
+    # 并发去重：已有同 device_id 的任务在跑，等它返回
+    task = _pending_identity.get(device_id)
+    if task is not None:
+        return await task
+
+    async def _do_create() -> User:
+        sm = get_sessionmaker()
+        async with sm() as db:
+            row = await db.execute(select(User).where(User.device_id == device_id))
+            user = row.scalar_one_or_none()
+            if user is not None:
                 await cache_set(f"identity:{device_id}", user.id, ttl=IDENTITY_TTL)
                 return user
-            except IntegrityError:
-                await db.rollback()
-    raise RuntimeError("用户注册失败：唯一 id 冲突重试耗尽")
+            for _ in range(5):
+                user = User(id=generate_user_id(), device_id=device_id)
+                db.add(user)
+                try:
+                    await db.commit()
+                    await cache_set(f"identity:{device_id}", user.id, ttl=IDENTITY_TTL)
+                    return user
+                except IntegrityError:
+                    await db.rollback()
+        raise RuntimeError("用户注册失败：唯一 id 冲突重试耗尽")
+
+    task = asyncio.create_task(_do_create())
+    _pending_identity[device_id] = task
+    try:
+        return await task
+    finally:
+        _pending_identity.pop(device_id, None)
 
 
 # 会话缓存 TTL：session_id → user_id 创建后永不改变，与身份映射同生命周期
@@ -221,34 +241,59 @@ async def add_message(session_id: str, role: str, content: str) -> None:
         await db.commit()
 
 
-MSG_TTL = 15  # 消息缓存 15 秒：不主动失效，靠 TTL 自然过期
+MSG_LIST_MAX = 200  # 每会话 Redis 列表最多保留条数
+
+
+async def add_message(session_id: str, role: str, content: str) -> None:
+    """写消息：DB 持久化 + Redis 列表同步写（write-through）。读永远从 Redis。"""
+    sm = get_sessionmaker()
+    async with sm() as db:
+        db.add(Message(session_id=session_id, role=role, content=content))
+        await db.commit()
+    # 同步推 Redis：右侧追加 + 裁剪上限，保留最近 MSG_LIST_MAX 条
+    cache_key = f"session:{session_id}:messages"
+    msg_json = json.dumps({"role": role, "content": content})
+    await cache_rpush(cache_key, msg_json)
+    await cache_ltrim(cache_key, -MSG_LIST_MAX, -1)
 
 
 async def get_messages(session_id: str, limit: int = 30) -> list[Message]:
-    """会话内最近 limit 条消息（按时间升序）。
+    """会话内最近 limit 条消息（按时间升序），始终从 Redis 列表读取。
 
-    Redis 热缓存（短 TTL，15s）：命中直接返回毫秒级；miss 才查 DB 并回填。
-    add_message 不碰缓存，新消息最多等 15s 出现在缓存里。
-    聊天面板打开的场景命中率极高，用户无感。
+    冷启动 / Redis 不可用时退 DB 兜底并回填列表。
     """
-    cache_key = f"session:{session_id}:msg:{limit}"
-    cached = await cache_get_json(cache_key)
-    if cached is not None:
-        return [Message(role=m["role"], content=m["content"]) for m in cached]
+    cache_key = f"session:{session_id}:messages"
+    raw = await cache_lrange(cache_key, -limit, -1)
+    if raw is not None and raw:
+        # Redis 命中：直接返回
+        return [Message(role=(p := json.loads(r))["role"], content=p["content"]) for r in raw]
 
+    # Redis 不可用 → 纯 DB 兜底
+    if raw is None:
+        sm = get_sessionmaker()
+        async with sm() as db:
+            row = await db.execute(
+                select(Message)
+                .where(Message.session_id == session_id)
+                .order_by(Message.id.desc())
+                .limit(limit)
+            )
+            return list(reversed(row.scalars().all()))
+
+    # raw == []：冷启动 / 空会话 → DB 全量回填列表
     sm = get_sessionmaker()
     async with sm() as db:
         row = await db.execute(
             select(Message)
             .where(Message.session_id == session_id)
             .order_by(Message.id.desc())
-            .limit(limit)
+            .limit(MSG_LIST_MAX)
         )
         messages = list(reversed(row.scalars().all()))
 
-    await cache_set_json(
-        cache_key,
-        [{"role": m.role, "content": m.content} for m in messages],
-        ttl=MSG_TTL,
-    )
-    return messages
+    if messages:
+        items = [json.dumps({"role": m.role, "content": m.content}) for m in messages]
+        await cache_rpush(cache_key, *items)
+        await cache_ltrim(cache_key, -MSG_LIST_MAX, -1)
+        return messages[-limit:] if limit < len(messages) else messages
+    return []
