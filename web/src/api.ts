@@ -2,6 +2,7 @@ import type {
   AgentInfo,
   CategoryInfo,
   ChatHistoryMessage,
+  DashboardStats,
   NewsListResponse,
   PasteCreateResponse,
   PasteDetailResponse,
@@ -165,8 +166,9 @@ async function streamAsk(
     return
   }
 
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder('utf-8')
+  // fetch + TextDecoder 解码流：pipeThrough(TextDecoderStream) 逐段解出文本，
+  // 完整的 SSE 帧按到达顺序派发，正文跟随后端流自然逐段显示。
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
   let buffer = ''
   let sourcesCount = 0
   let answerLength = 0
@@ -226,7 +228,7 @@ async function streamAsk(
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      buffer += value
       let sep = buffer.indexOf('\n\n')
       while (sep !== -1) {
         dispatch(buffer.slice(0, sep))
@@ -284,4 +286,19 @@ export async function fetchChatHistory(): Promise<ChatHistoryMessage[]> {
 
 export async function triggerIngest(): Promise<{ new: number; total: number }> {
   return request('/api/cron/ingest', { method: 'POST' })
+}
+
+/** 看板统计。默认近 7 天；若 localStorage 配了 hotscope.dashboard_token，仅此调用带 Authorization。 */
+export function fetchDashboardStats(params: {
+  days?: number
+  include_errors?: boolean
+}): Promise<DashboardStats> {
+  const q = new URLSearchParams()
+  if (params.days) q.set('days', String(params.days))
+  if (params.include_errors === false) q.set('include_errors', '0')
+  const token = localStorage.getItem('hotscope.dashboard_token')
+  return request(
+    `/api/dashboard/stats?${q.toString()}`,
+    token ? { headers: { Authorization: `Bearer ${token}` } } : {},
+  )
 }

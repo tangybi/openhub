@@ -14,7 +14,8 @@ import asyncio
 import json
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
+from sse_starlette.sse import EventSourceResponse
 
 from ..agents import AGENTS
 from ..db import ensure_session, get_messages
@@ -45,38 +46,38 @@ def _schedule_persist(question: str, answer: str, session_id: str) -> None:
     task.add_done_callback(_pending_persist_tasks.discard)
 
 
-def _sse_headers() -> dict:
-    return {
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-        "Connection": "keep-alive",
-    }
-
-
 async def _stream_sse(stream, *, question: str, session_id: str):
     """把 Agent 事件流统一转成 SSE 帧，并收集 delta 供会话落库；异常 → error 帧。
 
     stream 为 async generator，产出 AgentEvent：(sources/delta/done, data)。
+    帧交给 sse_starlette 编码；data 保持 JSON 字符串，前端按帧 JSON.parse。
     """
     answer_parts: list[str] = []
     try:
         async for event, data in stream:
             if event == "sources":
-                yield f"event: sources\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                yield {"event": "sources", "data": json.dumps(data, ensure_ascii=False)}
             elif event == "delta":
                 answer_parts.append(data)
-                yield f"event: delta\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                yield {"event": "delta", "data": json.dumps(data, ensure_ascii=False)}
             elif event == "done":
-                yield "event: done\ndata: {}\n\n"
+                yield {"event": "done", "data": "{}"}
     except Exception as e:
         logger.warning("流式回答出错：%s", e)
-        yield f"event: error\ndata: {json.dumps({'message': str(e)}, ensure_ascii=False)}\n\n"
+        yield {"event": "error", "data": json.dumps({"message": str(e)}, ensure_ascii=False)}
     finally:
         _schedule_persist(question, "".join(answer_parts), session_id)
 
 
 @router.get("", response_model=dict)
-async def list_agents(identity: Identity = Depends(get_identity)):
+async def list_agents(response: Response):
+    """Agent 列表（公开静态数据，仅随部署变化）。
+
+    缓存策略：不依赖身份（响应对所有用户一致），走 HTTP 缓存——
+    `public` 允许浏览器/CDN 缓存，`max-age=300` 新鲜期 5 分钟，
+    `stale-while-revalidate` 过期后立即回旧数据、后台异步刷新。
+    """
+    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=86400"
     return {
         "agents": [
             AgentInfo(
@@ -125,7 +126,7 @@ async def ask_unified_stream(
     identity: Identity = Depends(get_identity),
     x_session_id: str | None = Header(default=None),
 ):
-    """统一 Ask 流式入口（SSE）：路由后委托专家流式回答；兜底时整段流出通用回答。"""
+    """统一 Ask 流式入口（SSE）：路由后委托专家流式回答；兜底也流式流出通用回答。"""
     session_id = (x_session_id or "").strip()
     if session_id:
         await ensure_session(session_id, identity.user_id)
@@ -139,26 +140,25 @@ async def ask_unified_stream(
             )
         except Exception as e:
             logger.warning("统一 Ask 路由失败：%s", e)
-            yield f"event: error\ndata: {json.dumps({'message': str(e)}, ensure_ascii=False)}\n\n"
+            yield {"event": "error", "data": json.dumps({"message": str(e)}, ensure_ascii=False)}
             return
         if agent is not None:
             stream = agent.ask_stream(question, user_id=identity.user_id, session_id=session_id)
         else:
 
             async def _fallback_stream():
-                answer = await route_svc.general_answer(
-                    question, user_id=identity.user_id, session_id=session_id, history=history
-                )
                 yield ("sources", [])
-                if answer:
-                    yield ("delta", answer)
+                async for delta in route_svc.general_answer_stream(
+                    question, user_id=identity.user_id, session_id=session_id, history=history
+                ):
+                    yield ("delta", delta)
                 yield ("done", None)
 
             stream = _fallback_stream()
         async for frame in _stream_sse(stream, question=question, session_id=session_id):
             yield frame
 
-    return StreamingResponse(_sse(), media_type="text/event-stream", headers=_sse_headers())
+    return EventSourceResponse(_sse(), ping=15, sep="\n")
 
 
 @router.post("/{name}/ask", response_model=AskResponse)
@@ -206,10 +206,8 @@ async def ask_agent_stream(
 
     question = body.question.strip()
     stream = agent.ask_stream(question, user_id=identity.user_id, session_id=session_id)
-    return StreamingResponse(
-        _stream_sse(stream, question=question, session_id=session_id),
-        media_type="text/event-stream",
-        headers=_sse_headers(),
+    return EventSourceResponse(
+        _stream_sse(stream, question=question, session_id=session_id), ping=15, sep="\n"
     )
 
 

@@ -12,7 +12,7 @@ from .otel import init_tracing
 
 from . import __version__
 from .config import settings
-from .routers import agents, cron, news, pastes, trace
+from .routers import agents, cron, dashboard, news, pastes, trace
 
 
 @asynccontextmanager
@@ -40,6 +40,7 @@ app.add_middleware(
 app.include_router(news.router)
 app.include_router(agents.router)
 app.include_router(cron.router)
+app.include_router(dashboard.router)
 app.include_router(trace.router)
 app.include_router(pastes.router)
 app.include_router(pastes.public_router)

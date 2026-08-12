@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from .cache import cache_get, cache_get_json, cache_set, cache_set_json
 from .config import settings
 
 _engine: AsyncEngine | None = None
@@ -135,6 +136,10 @@ def generate_user_id() -> str:
     return "用户" + secrets.token_hex(4)
 
 
+# 身份映射缓存 TTL：device_id → user_id 创建后永不改变，7 天足够
+IDENTITY_TTL = 7 * 24 * 3600
+
+
 async def init_db() -> None:
     """建表（含 pgvector 扩展）。应用启动时调用一次。"""
     from pgvector.sqlalchemy import Vector  # noqa: F401  确保 VECTOR 类型注册
@@ -146,26 +151,52 @@ async def init_db() -> None:
 
 
 async def get_or_create_user(device_id: str) -> User:
-    """按设备唯一标识惰性注册用户；同 device_id 永远返回同一用户。"""
+    """按设备唯一标识惰性注册用户；同 device_id 永远返回同一用户。
+
+    先查 Redis（device_id → user_id），命中直接返回，跳过 Neon 往返
+    （Neon 冷连接/跨地域单次查询可达 1-3s）；未命中才查库，成功后写缓存。
+    Redis 不可用时静默降级为纯 DB 逻辑。
+    """
+    cached = await cache_get(f"identity:{device_id}")
+    if cached:
+        return User(id=cached, device_id=device_id)
     sm = get_sessionmaker()
     async with sm() as db:
         row = await db.execute(select(User).where(User.device_id == device_id))
         user = row.scalar_one_or_none()
         if user is not None:
+            await cache_set(f"identity:{device_id}", user.id, ttl=IDENTITY_TTL)
             return user
         for _ in range(5):  # 随机 id 撞主键时重试
             user = User(id=generate_user_id(), device_id=device_id)
             db.add(user)
             try:
                 await db.commit()
+                await cache_set(f"identity:{device_id}", user.id, ttl=IDENTITY_TTL)
                 return user
             except IntegrityError:
                 await db.rollback()
     raise RuntimeError("用户注册失败：唯一 id 冲突重试耗尽")
 
 
+# 会话缓存 TTL：session_id → user_id 创建后永不改变，与身份映射同生命周期
+SESSION_TTL = 7 * 24 * 3600
+
+
 async def ensure_session(session_id: str, user_id: str) -> None:
-    """确保会话存在且属于该用户（前端传入 session_id，首个请求惰性创建）。"""
+    """确保会话存在且属于该用户。
+
+    Redis 优先（cache-aside）：命中即返回，完全跳过 Neon 往返；
+    未命中才查 DB，成功后将 session_id → user_id 写回 Redis。
+    session 一旦创建归属即永久不变，无失效风险。
+    """
+    cache_key = f"session:{session_id}:user"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        if cached != user_id:
+            raise ValueError("会话不属于当前用户")
+        return
+
     sm = get_sessionmaker()
     async with sm() as db:
         row = await db.execute(select(Session).where(Session.id == session_id))
@@ -173,12 +204,14 @@ async def ensure_session(session_id: str, user_id: str) -> None:
         if existing is not None:
             if existing.user_id != user_id:
                 raise ValueError("会话不属于当前用户")
+            await cache_set(cache_key, existing.user_id, ttl=SESSION_TTL)
             return
         db.add(Session(id=session_id, user_id=user_id))
         try:
             await db.commit()
         except IntegrityError:
             await db.rollback()  # 并发创建，忽略
+        await cache_set(cache_key, user_id, ttl=SESSION_TTL)
 
 
 async def add_message(session_id: str, role: str, content: str) -> None:
@@ -188,8 +221,21 @@ async def add_message(session_id: str, role: str, content: str) -> None:
         await db.commit()
 
 
+MSG_TTL = 15  # 消息缓存 15 秒：不主动失效，靠 TTL 自然过期
+
+
 async def get_messages(session_id: str, limit: int = 30) -> list[Message]:
-    """会话内最近 limit 条消息（按时间升序）。"""
+    """会话内最近 limit 条消息（按时间升序）。
+
+    Redis 热缓存（短 TTL，15s）：命中直接返回毫秒级；miss 才查 DB 并回填。
+    add_message 不碰缓存，新消息最多等 15s 出现在缓存里。
+    聊天面板打开的场景命中率极高，用户无感。
+    """
+    cache_key = f"session:{session_id}:msg:{limit}"
+    cached = await cache_get_json(cache_key)
+    if cached is not None:
+        return [Message(role=m["role"], content=m["content"]) for m in cached]
+
     sm = get_sessionmaker()
     async with sm() as db:
         row = await db.execute(
@@ -198,4 +244,11 @@ async def get_messages(session_id: str, limit: int = 30) -> list[Message]:
             .order_by(Message.id.desc())
             .limit(limit)
         )
-        return list(reversed(row.scalars().all()))
+        messages = list(reversed(row.scalars().all()))
+
+    await cache_set_json(
+        cache_key,
+        [{"role": m.role, "content": m.content} for m in messages],
+        ttl=MSG_TTL,
+    )
+    return messages

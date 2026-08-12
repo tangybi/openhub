@@ -80,3 +80,70 @@ class PasteDetailResponse(BaseModel):
     created_at: str  # ISO8601
     files: list[PasteFileInfo] = []
     links: list[PasteLink] = []  # 短链列表：正文 + 每个附件各一条，可独立分享
+
+
+class DateRange(BaseModel):
+    """看板统计的时间范围。"""
+
+    start: str  # YYYY-MM-DD（含）
+    end: str
+    days: int
+
+
+class OverviewStat(BaseModel):
+    """看板总览指标（从日志聚合）。"""
+
+    uv: int = 0
+    uv_source: str = "none"  # device_id | user_token | none
+    user_count: int = 0  # 去重 user= 用户数（始终算，与 uv_source 无关）
+    pv: int = 0
+    ask_count: int = 0
+    total_requests: int = 0
+    avg_latency_ms: float | None = None
+    p95_latency_ms: float | None = None
+    max_latency_ms: float | None = None
+    error_count: int = 0
+    error_rate: float = 0.0  # 后端错误请求 / 总请求 * 100
+    llm_calls: int = 0  # LLM 调用次数
+    prompt_tokens: int = 0  # LLM 输入 tokens
+    completion_tokens: int = 0  # LLM 输出 tokens
+    embed_tokens: int = 0  # embedding（向量化）tokens
+    total_tokens: int = 0  # prompt + completion + embed
+
+
+class EndpointStat(BaseModel):
+    """单个接口（method+route）的响应时长与错误统计。"""
+
+    method: str
+    route: str
+    count: int = 0
+    avg_latency_ms: float | None = None
+    p95_latency_ms: float | None = None
+    max_latency_ms: float | None = None
+    error_count: int = 0
+
+
+class ErrorDetail(BaseModel):
+    """一条错误请求 / 前端异常详情。"""
+
+    time: str  # YYYY-MM-DD HH:MM:SS（来自日志行前缀）
+    source: str  # backend | frontend
+    method: str = ""
+    route: str = ""
+    status_code: int | None = None
+    span_status: str = ""
+    request_body: str = ""
+    response_body: str = ""
+    message: str = ""  # 前端异常的 msg
+    trace_id: str = ""
+
+
+class DashboardStats(BaseModel):
+    """看板统计聚合结果。"""
+
+    range: DateRange
+    overview: OverviewStat
+    endpoints: list[EndpointStat] = []
+    errors: list[ErrorDetail] = []
+    files_parsed: list[str] = []
+    log_dir: str = ""

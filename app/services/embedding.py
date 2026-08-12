@@ -9,6 +9,9 @@ from __future__ import annotations
 import httpx
 
 from ..config import settings
+from ..logger_config import get_logger
+
+logger = get_logger()
 
 
 class EmbeddingError(Exception):
@@ -35,9 +38,18 @@ async def embed_batch(texts: list[str]) -> list[list[float]]:
     data = r.json()
     try:
         items = sorted(data["data"], key=lambda x: x["index"])
-        return [it["embedding"] for it in items]
+        vecs = [it["embedding"] for it in items]
     except (KeyError, TypeError, IndexError):
         raise EmbeddingError(f"embedding 返回格式异常: {str(data)[:300]}")
+    usage = data.get("usage") or {}
+    if usage:  # 看板统计 token 用量
+        logger.info(
+            "Embedding 用量 model=%s prompt=%s total=%s",
+            settings.embedding_model,
+            usage.get("prompt_tokens", 0),
+            usage.get("total_tokens", 0),
+        )
+    return vecs
 
 
 async def embed_one(text: str) -> list[float]:

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, reactive, ref, watch } from 'vue'
 import type { ChatMessage } from '../types'
 import { askRouterStream, fetchChatHistory } from '../api'
 
@@ -12,26 +12,42 @@ const messages = ref<ChatMessage[]>([])
 const bodyRef = ref<HTMLElement | null>(null)
 const historyLoaded = ref(false)
 
-async function scrollBottom() {
-  await nextTick()
-  if (bodyRef.value) bodyRef.value.scrollTop = bodyRef.value.scrollHeight
+// 自动滚到底部：nextTick 等 Vue 把增量渲染进 DOM，rAF 再等浏览器布局完成，
+// 双保险避免流式增量时差一帧没滚到位；即时跳转，流式场景不用平滑动画。
+function scrollBottom() {
+  const el = bodyRef.value
+  if (!el) return
+  nextTick(() => requestAnimationFrame(() => { el.scrollTop = el.scrollHeight }))
 }
 
-// 打开聊天窗时恢复会话历史（刷新/重开断点恢复），仅当本地还没有消息时拉取一次
-watch(open, async (v) => {
-  if (v && !historyLoaded.value && !messages.value.length) {
-    try {
-      const history = await fetchChatHistory()
-      if (history.length) {
-        messages.value = history.map((m) => ({ role: m.role, content: m.content }))
-        scrollBottom()
+// 兜底：任何消息变化（发送/流式增量/来源/错误标注/历史恢复）都自动滚底。
+// flush:'post' 保证回调在 DOM 更新后跑，此时 scrollHeight 才是最新高度。
+watch(messages, scrollBottom, { deep: true, flush: 'post' })
+
+// 打开聊天窗时自动滚到底部：重开面板（已有消息）也能断点续看最新内容。
+// flush:'post' 关键：回调在 v-if 面板渲染进 DOM 之后才执行，此时 bodyRef 已挂载，
+// scrollBottom 才不会因取到 null 而空跑。再叠加历史恢复分支：
+// 仅当本地还没有消息时拉取一次（刷新/重开断点恢复）。
+watch(
+  open,
+  async (v) => {
+    if (!v) return
+    scrollBottom()
+    if (!historyLoaded.value && !messages.value.length) {
+      try {
+        const history = await fetchChatHistory()
+        if (history.length) {
+          messages.value = history.map((m) => ({ role: m.role, content: m.content }))
+          scrollBottom()
+        }
+      } catch {
+        // 历史拉取失败不阻塞，继续允许提问
       }
-    } catch {
-      // 历史拉取失败不阻塞，继续允许提问
+      historyLoaded.value = true
     }
-    historyLoaded.value = true
-  }
-})
+  },
+  { flush: 'post' },
+)
 
 async function send() {
   const q = input.value.trim()
@@ -40,8 +56,10 @@ async function send() {
   input.value = ''
   sending.value = true
   scrollBottom()
-  // 先插入空 assistant 气泡，流式累积；持有对象引用，避免按索引在并发/关闭面板时漂移
-  const bubble: ChatMessage = { role: 'assistant', content: '' }
+  // 先插入空 assistant 气泡，流式累积；持有对象引用，避免按索引在并发/关闭面板时漂移。
+  // 必须用 reactive() 包裹：否则 onDelta 改的是原始对象，而模板读的是响应式代理，
+  // 增量不会触发重渲染，整段答案要等 sending 置 false 才一次性出现（=无流式效果）。
+  const bubble = reactive<ChatMessage>({ role: 'assistant', content: '' })
   messages.value.push(bubble)
   await askRouterStream(q, {
     onSources(sources) {

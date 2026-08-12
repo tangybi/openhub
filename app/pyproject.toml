@@ -24,10 +24,13 @@ dependencies = [
     "mem0ai[nlp]>=2.0.14",
     # 对象存储：Cloudflare R2（S3 兼容），粘贴正文与附件
     "boto3>=1.34",
+    # 缓存：Redis（身份映射、新闻列表热点数据），未配置时静默降级
+    "redis>=5.0",
     "opentelemetry-api>=1.24",
     "opentelemetry-sdk>=1.24",
     "opentelemetry-instrumentation-fastapi>=0.49b0",
     "opentelemetry-instrumentation-httpx>=0.49b0",
+    "sse-starlette>=3.4.8",
 ]
 
 [dependency-groups]

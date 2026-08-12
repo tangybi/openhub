@@ -13,4 +13,20 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // 手动指定文件名格式，包含内容哈希
+        entryFileNames: 'assets/js/[name]-[hash].js',
+        chunkFileNames: 'assets/js/[name]-[hash].js',
+        assetFileNames: (assetInfo) => {
+          // CSS 文件也加上哈希
+          if (assetInfo.names.includes('.css')) {
+            return 'assets/css/[name]-[hash].[ext]';
+          }
+          return 'assets/[name]-[hash].[ext]';
+        },
+      },
+    },
+  },
 })

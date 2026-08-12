@@ -2,7 +2,11 @@
 import type { AgentInfo } from '../types'
 import { agentIcon } from '../agents'
 
-defineProps<{ agents: AgentInfo[]; active: string }>()
+defineProps<{
+  agents: AgentInfo[]
+  active: string
+  extraTab?: { name: string; label: string; icon: string }
+}>()
 defineEmits<{ (e: 'select', name: string): void }>()
 </script>
 
@@ -27,6 +31,15 @@ defineEmits<{ (e: 'select', name: string): void }>()
           <span class="tab-icon">{{ agentIcon(a.name) }}</span>
           {{ a.label }}
           <span v-if="!a.available" class="soon">规划中</span>
+        </button>
+        <button
+          v-if="extraTab"
+          class="tab"
+          :class="{ active: active === extraTab.name }"
+          @click="$emit('select', extraTab.name)"
+        >
+          <span class="tab-icon">{{ extraTab.icon }}</span>
+          {{ extraTab.label }}
         </button>
       </nav>
     </div>

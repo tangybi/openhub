@@ -9,10 +9,12 @@
 
 from __future__ import annotations
 
+from typing import AsyncIterator
+
 from ..agents import Agent, AGENTS
 from ..db import add_message
 from ..logger_config import get_logger
-from .llm import LLMError, chat_completion, chat_json
+from .llm import LLMError, chat_completion, chat_completion_stream, chat_json
 
 logger = get_logger()
 
@@ -115,6 +117,38 @@ async def general_answer(
         logger.warning("兜底通用回答 LLM 失败：%s", e)
         return _FALLBACK_ANSWER
     return answer or _FALLBACK_ANSWER
+
+
+async def general_answer_stream(
+    question: str,
+    *,
+    user_id: str = "",
+    session_id: str = "",
+    history: list | None = None,
+) -> AsyncIterator[str]:
+    """兜底：通用助手流式回答（与 general_answer 同款提示词）。LLM 失败 → 整段静态专家清单。"""
+    directions = "、".join(f"{a.label}（{a.description}）" for a in _available_agents())
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是通用助手。用户的问题不属于任何专家方向，直接自然回答；"
+                "若问题适合更专业的处理，简要说明可以问的方向。\n"
+                f"可用的专家方向：{directions}"
+            ),
+        },
+    ]
+    if history:
+        messages.append({"role": "user", "content": f"【本会话最近对话】\n{_format_history(history)}"})
+    messages.append({"role": "user", "content": question})
+    try:
+        async for delta in chat_completion_stream(
+            messages, temperature=0.4, user_id=user_id, session_id=session_id
+        ):
+            yield delta
+    except LLMError as e:
+        logger.warning("兜底通用回答流式 LLM 失败：%s", e)
+        yield _FALLBACK_ANSWER
 
 
 async def persist_session(session_id: str, question: str, answer: str) -> None:

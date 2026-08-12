@@ -83,3 +83,60 @@ export interface PasteDetailResponse {
   files: PasteFileInfo[]
   links: PasteLink[]
 }
+
+export interface DateRange {
+  start: string
+  end: string
+  days: number
+}
+
+export interface OverviewStat {
+  uv: number
+  uv_source: 'device_id' | 'user_token' | 'none'
+  user_count: number
+  pv: number
+  ask_count: number
+  total_requests: number
+  avg_latency_ms: number | null
+  p95_latency_ms: number | null
+  max_latency_ms: number | null
+  error_count: number
+  error_rate: number
+  llm_calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  embed_tokens: number
+  total_tokens: number
+}
+
+export interface EndpointStat {
+  method: string
+  route: string
+  count: number
+  avg_latency_ms: number | null
+  p95_latency_ms: number | null
+  max_latency_ms: number | null
+  error_count: number
+}
+
+export interface ErrorDetail {
+  time: string
+  source: 'backend' | 'frontend'
+  method: string
+  route: string
+  status_code: number | null
+  span_status: string
+  request_body: string
+  response_body: string
+  message: string
+  trace_id: string
+}
+
+export interface DashboardStats {
+  range: DateRange
+  overview: OverviewStat
+  endpoints: EndpointStat[]
+  errors: ErrorDetail[]
+  files_parsed: string[]
+  log_dir: string
+}

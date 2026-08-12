@@ -2,6 +2,13 @@
 import { onMounted, ref } from 'vue'
 import type { CategoryInfo, NewsItem } from '../types'
 import { fetchCategories, fetchNews, triggerIngest } from '../api'
+import {
+  getLastCategory,
+  getNewsViewCache,
+  mergeNewsDiff,
+  setLastCategory,
+  setNewsViewCache,
+} from '../utils/newsCache'
 import CategoryFilter from '../components/CategoryFilter.vue'
 import NewsWaterfall from '../components/NewsWaterfall.vue'
 import AskAgent from '../components/AskAgent.vue'
@@ -23,6 +30,19 @@ const ingestMsg = ref('')
 
 const detail = ref<NewsItem | null>(null)
 
+// 每次成功拉取后把当前视图状态写进模块级缓存（按分类独立缓存，含搜索与分页进度），
+// Tab 切走再切回 / 分类标签切换回来时都能立即恢复，无加载态闪烁。
+function commitCache() {
+  setNewsViewCache(activeCategory.value, {
+    items: items.value,
+    total: total.value,
+    page: page.value,
+    finished: finished.value,
+    search: search.value,
+  })
+  setLastCategory(activeCategory.value)
+}
+
 async function load(reset = false) {
   // reset（切换分类/搜索/首次加载）永远执行；追加加载才受 loading 守卫限制
   if (loading.value && !reset) return
@@ -43,11 +63,42 @@ async function load(reset = false) {
     total.value = data.total
     finished.value = items.value.length >= data.total
     if (reset) initialized.value = true
+    commitCache()
   } catch (e: any) {
     // 空态会提示启动后端
     console.error(e)
   } finally {
     loading.value = false
+  }
+}
+
+// 切回 Tab 时的后台静默更新：不显示加载态、不清空列表。
+// 成功后将最新第一页与当前第一页做 diff——变化小则局部合并（新增插前/字段原地更新），
+// 变化大才整体替换并回卷分页。失败则保留缓存数据，不打扰用户。
+async function silentRefresh() {
+  try {
+    const data = await fetchNews({
+      category: activeCategory.value,
+      q: search.value,
+      page: 1,
+      page_size: pageSize,
+    })
+    // 只对比第一页：避免用户已深翻页时把「后续分页」误判为大变更而清空列表
+    const currentFirst = items.value.slice(0, pageSize)
+    const { items: mergedFirst, small } = mergeNewsDiff(currentFirst, data.items)
+    if (small) {
+      // 局部刷新：合并后的第一页 + 保留后续已加载分页
+      items.value = [...mergedFirst, ...items.value.slice(pageSize)]
+    } else {
+      // 大变更：整体替换为最新第一页，分页回卷
+      items.value = data.items
+      page.value = 1
+    }
+    total.value = data.total
+    finished.value = items.value.length >= data.total
+    commitCache()
+  } catch (e: any) {
+    console.error('[news silent refresh]', e)
   }
 }
 
@@ -57,9 +108,25 @@ function loadMore() {
   load()
 }
 
+// 分类标签切换：命中该分类缓存 → 立即恢复上次浏览状态（含搜索），后台静默刷新对比差异；
+// 未命中才重新请求。搜索是显式动作，始终重新请求（onSearch 保持 load(true)）。
 function onCategory(c: string) {
+  if (c === activeCategory.value) return // 已在该分类，避免无谓刷新
   activeCategory.value = c
-  load(true)
+  setLastCategory(c)
+  const cached = getNewsViewCache(c)
+  if (cached) {
+    search.value = cached.search
+    items.value = cached.items
+    total.value = cached.total
+    page.value = cached.page
+    finished.value = cached.finished
+    initialized.value = true
+    loading.value = false
+    silentRefresh()
+  } else {
+    load(true)
+  }
 }
 
 function onSearch() {
@@ -88,12 +155,31 @@ async function onIngest() {
 }
 
 onMounted(async () => {
+  // 先同步恢复最后浏览分类的缓存：不 await 任何网络请求，保证切回 Tab 时「立即展示」。
+  const category = getLastCategory()
+  activeCategory.value = category
+  const cached = getNewsViewCache(category)
+  if (cached) {
+    search.value = cached.search
+    items.value = cached.items
+    total.value = cached.total
+    page.value = cached.page
+    finished.value = cached.finished
+    initialized.value = true
+    loading.value = false
+  }
   try {
     categories.value = await fetchCategories()
   } catch {
     categories.value = [{ name: '全部', count: 0 }]
   }
-  load(true)
+  if (cached) {
+    // 后台静默更新：不打断浏览，成功后 diff 局部刷新
+    silentRefresh()
+  } else {
+    // 首次进入：正常请求并写入缓存
+    load(true)
+  }
 })
 </script>
 

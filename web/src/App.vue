@@ -7,9 +7,12 @@ import { AGENT_TABS } from './agents'
 import AppHeader from './components/AppHeader.vue'
 import NewsView from './views/NewsView.vue'
 import PasteView from './views/PasteView.vue'
+import DashboardView from './views/DashboardView.vue'
 import PlaceholderView from './views/PlaceholderView.vue'
 
 const agents = ref<AgentInfo[]>([])
+// 看板固定 tab：不来自后端 agents 列表，独立渲染在 agent tabs 之后
+const DASHBOARD_TAB = { name: 'dashboard', label: '看板', icon: '📊' }
 const activeAgent = ref('news')
 const backendUp = ref(true)
 
@@ -37,13 +40,19 @@ onMounted(async () => {
 
 <template>
   <div class="app">
-    <AppHeader :agents="agents" :active="activeAgent" @select="activeAgent = $event" />
+    <AppHeader
+      :agents="agents"
+      :active="activeAgent"
+      :extra-tab="DASHBOARD_TAB"
+      @select="activeAgent = $event"
+    />
     <div v-if="!backendUp" class="offline-banner">
       ⚠️ 后端未连接（请先启动 <code>uv run uvicorn main:app --port 8000</code>），当前展示本地兜底数据。
     </div>
     <main class="app-main">
       <NewsView v-if="activeAgent === 'news'" />
       <PasteView v-else-if="activeAgent === 'paste'" />
+      <DashboardView v-else-if="activeAgent === 'dashboard'" />
       <PlaceholderView v-else :agent="activeAgentInfo" />
     </main>
   </div>

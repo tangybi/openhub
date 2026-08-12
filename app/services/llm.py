@@ -67,6 +67,15 @@ async def chat_completion(
             answer = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
             raise LLMError(f"DeepSeek 返回格式异常: {str(data)[:300]}")
+        usage = data.get("usage") or {}
+        if usage:  # 看板统计 token 用量
+            logger.info(
+                "LLM 用量 model=%s prompt=%s completion=%s total=%s",
+                settings.deepseek_model,
+                usage.get("prompt_tokens", 0),
+                usage.get("completion_tokens", 0),
+                usage.get("total_tokens", 0),
+            )
         if answer and answer.strip():
             break
         logger.warning("LLM 返回空内容，第 %d 次尝试（user=%s session=%s）",
@@ -100,6 +109,8 @@ async def chat_completion_stream(
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": True,
+        # 流式结束前多推一个带 usage 的 chunk（choices 为空），用于统计 token 用量
+        "stream_options": {"include_usage": True},
     }
     if user_id:
         payload["user"] = user_id
@@ -109,6 +120,7 @@ async def chat_completion_stream(
     headers = {"Authorization": f"Bearer {settings.deepseek_api_key}"}
     for attempt in (1, 2):
         got_any = False
+        usage: dict | None = None
         async with httpx.AsyncClient(timeout=90) as client:
             try:
                 async with client.stream("POST", url, json=payload, headers=headers) as r:
@@ -123,6 +135,8 @@ async def chat_completion_stream(
                             break
                         try:
                             chunk = json.loads(data)
+                            if chunk.get("usage"):
+                                usage = chunk["usage"]  # 结束前那条 chunk（choices 为空）
                             delta = chunk["choices"][0]["delta"].get("content", "")
                         except (KeyError, IndexError, TypeError, json.JSONDecodeError):
                             continue  # 心跳/空对象/格式异常，忽略
@@ -132,6 +146,14 @@ async def chat_completion_stream(
             except httpx.HTTPError as e:
                 raise LLMError(f"DeepSeek 网络/HTTP 异常: {e}") from e
         if got_any:
+            if usage:  # 看板统计 token 用量
+                logger.info(
+                    "LLM 用量 model=%s prompt=%s completion=%s total=%s",
+                    settings.deepseek_model,
+                    usage.get("prompt_tokens", 0),
+                    usage.get("completion_tokens", 0),
+                    usage.get("total_tokens", 0),
+                )
             return
         logger.warning("LLM 流式返回空内容，第 %d 次尝试（user=%s session=%s）",
                        attempt, user_id or "-", session_id or "-")

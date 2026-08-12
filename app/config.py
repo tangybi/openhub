@@ -37,6 +37,9 @@ class Settings:
     # 云端数据库（Neon Postgres + pgvector）：users/sessions/messages + RAG 向量 + mem0 记忆
     database_url: str = field(default_factory=lambda: _get("DATABASE_URL"))
 
+    # Redis 缓存（身份映射/新闻列表等热点数据）；未配置时自动降级为直连，不影响功能
+    redis_url: str = field(default_factory=lambda: _get("REDIS_URL"))
+
     # 对象存储：Cloudflare R2（S3 兼容，boto3）。粘贴正文与附件落 R2，短链接 302 直出。
     r2_access_key: str = field(default_factory=lambda: _get("R2_ACCESS_KEY"))
     r2_secret_key: str = field(default_factory=lambda: _get("R2_SECRET_KEY"))
@@ -67,13 +70,18 @@ class Settings:
     # 抓取保护：配置后 /api/cron/ingest 需要 Authorization: Bearer <secret>
     cron_secret: str = field(default_factory=lambda: _get("CRON_SECRET"))
 
+    # 看板日志目录（默认 app/log，绝对路径与运行目录无关；可被 LOG_DIR 覆盖）。
+    # dashboard_secret 配置后 GET /api/dashboard/* 需要 Authorization: Bearer <secret>
+    log_dir: str = field(default_factory=lambda: _get("LOG_DIR", str(APP_DIR / "log")))
+    dashboard_secret: str = field(default_factory=lambda: _get("DASHBOARD_SECRET"))
+
     # 允许跨域的前端地址
     cors_origins: list[str] = field(
         default_factory=lambda: [
             o.strip()
             for o in _get(
                 "CORS_ORIGINS",
-                "http://localhost:5173,http://localhost:4173",
+                "https://openhub.allberry.cn,http://localhost:5173,http://localhost:4173",
             ).split(",")
             if o.strip()
         ]

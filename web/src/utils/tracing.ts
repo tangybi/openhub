@@ -20,6 +20,7 @@ import {
 } from '@opentelemetry/sdk-trace-web'
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-web'
 import { API_BASE } from './apiBase'
+import { getDeviceId, getSessionId } from './identity'
 
 let _tracer: Tracer | null = null
 
@@ -72,11 +73,17 @@ export function initTracing(): void {
   provider.register({ contextManager: new StackContextManager() })
   propagation.setGlobalPropagator(new W3CTraceContextPropagator())
   _tracer = trace.getTracer('hotscope-web')
+  installGlobalErrorCapture() // 未捕获异常 / Promise 拒绝 / console.error → 前端异常日志
 }
 
-/** 创建一个 span（无父级时为根 span，有自己的 trace_id）。 */
+/** 身份属性：所有前端 span 统一携带 device_id/session_id，后端日志侧据此统计 UV（去重设备）。 */
+function identityAttrs(): Attributes {
+  return { device_id: getDeviceId(), session_id: getSessionId() }
+}
+
+/** 创建一个 span（无父级时为根 span，有自己的 trace_id）。自动带上身份属性，调用方 attrs 优先。 */
 export function startSpan(name: string, attrs?: Attributes): Span {
-  return tracer().startSpan(name, { attributes: attrs })
+  return tracer().startSpan(name, { attributes: { ...identityAttrs(), ...attrs } })
 }
 
 /** 在业务 span 内执行异步任务：正常自动置 OK，抛错自动记 ERROR 并重新抛出。 */
@@ -98,11 +105,11 @@ export async function runWithSpan<T>(
   }
 }
 
-/** 以 parent 为父级创建子 span（显式传父，浏览器无 zone.js 也不丢关联）。 */
+/** 以 parent 为父级创建子 span（显式传父，浏览器无 zone.js 也不丢关联）。同样带上身份属性。 */
 export function startChildSpan(parent: Span, name: string, attrs?: Attributes): Span {
   // v2：startSpan 不再接受 parent 选项，改由 context.with 提供活跃父上下文
   const ctx = trace.setSpan(context.active(), parent)
-  return context.with(ctx, () => tracer().startSpan(name, { attributes: attrs }))
+  return context.with(ctx, () => tracer().startSpan(name, { attributes: { ...identityAttrs(), ...attrs } }))
 }
 
 /** 把 span 的 W3C traceparent 注入请求头，让后端请求继承同一 trace_id。 */
@@ -110,8 +117,74 @@ export function injectTraceparent(span: Span, headers: Record<string, string>): 
   propagation.inject(trace.setSpan(context.active(), span), headers)
 }
 
-/** 标记 span 出错 + 记录异常（业务层在「已处理的错误分支」手动调用）。 */
-export function recordSpanError(span: Span, message: string): void {
-  span.recordException(new Error(message))
+/** 标记 span 出错 + 记录异常（业务层在「已处理的错误分支」手动调用）。
+ *  传入原始 err 时异常事件的 type 会是真实类名（如 TypeError），否则统一记为 Error。 */
+export function recordSpanError(span: Span, message: string, err?: unknown): void {
+  span.recordException(err instanceof Error ? err : new Error(message))
   span.setStatus({ code: SpanStatusCode.ERROR, message })
+}
+
+/** 把任意值格式化成可读单行文本：Error 取 name+message，对象 JSON 化（console.error 补丁用）。 */
+function fmtConsoleArg(v: unknown): string {
+  if (v instanceof Error) return `${v.name}: ${v.message}`
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || v == null) return String(v)
+  try {
+    return JSON.stringify(v) ?? String(v)
+  } catch {
+    return String(v)
+  }
+}
+
+let _errorCaptureInstalled = false
+
+/** 上报一个全局错误：起根 span 标 ERROR 并结束，异常事件经 /api/trace 落「前端异常」日志。 */
+function reportGlobalError(name: string, message: string, attrs: Attributes, err?: unknown): void {
+  try {
+    if (!_tracer) return // initTracing 前发生的错误不报（也没有通道）
+    const span = startSpan(name, attrs)
+    recordSpanError(span, message, err)
+    span.end()
+  } catch {
+    /* 上报失败静默，不干扰页面 */
+  }
+}
+
+/** 全局错误捕获（幂等）：未捕获异常 / Promise 拒绝 / 裸 console.error 统一上报。
+ *  由 initTracing 挂载，复用 /api/trace 通道，后端无需改动；span 名即日志里「前端异常 name=」。 */
+function installGlobalErrorCapture(): void {
+  if (_errorCaptureInstalled) return
+  _errorCaptureInstalled = true
+
+  // 未捕获异常（含资源加载失败：非 ErrorEvent 且 target 是元素时是资源错误，无 error 对象与 message）
+  window.addEventListener('error', (e) => {
+    const target = e.target as HTMLElement | null
+    if (target != null && !(e instanceof ErrorEvent)) {
+      const url = target.getAttribute('src') ?? target.getAttribute('href') ?? ''
+      reportGlobalError('uncaught_error', `资源加载失败：${target.tagName}${url ? ` ${url}` : ''}`, {
+        resource: target.tagName,
+      })
+    } else {
+      reportGlobalError('uncaught_error', e.message, { error_type: e.error?.constructor?.name }, e.error)
+    }
+  })
+
+  // 未处理 Promise 拒绝
+  window.addEventListener('unhandledrejection', (e) => {
+    const r = e.reason
+    reportGlobalError(
+      'unhandled_rejection',
+      r instanceof Error ? r.message : String(r),
+      { error_type: r instanceof Error ? r.constructor.name : typeof r },
+      r,
+    )
+  })
+
+  // 裸 console.error：捕获「已 try/catch 但没走埋点」的错误（如 NewsView 的 catch 里 console.error）。
+  // 补丁后照常调用原 console.error 保证控制台行为不变。
+  const orig = console.error
+  console.error = (...args: unknown[]) => {
+    orig.apply(console, args)
+    const err = args.find((a): a is Error => a instanceof Error)
+    reportGlobalError('console_error', args.map(fmtConsoleArg).join(' ').slice(0, 500), {}, err)
+  }
 }
